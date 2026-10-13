@@ -1,0 +1,11 @@
+groq
+python-dotenv
+pandas
+beautifulsoup4 
+requests
+openpyxl
+cryptography
+reportlab
+Pillow
+fastapi
+uvicorn[standard]

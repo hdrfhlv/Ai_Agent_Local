@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.venv/
+frontend/node_modules/
+frontend/dist/
+day_1/venv/
+__pycache__/
+*.pyc
+password_vault.enc
+data/finance.sqlite3
+data/finance.sqlite3-shm
+data/finance.sqlite3-wal
+hasil_scraping.xlsx
+hasil scrape/
