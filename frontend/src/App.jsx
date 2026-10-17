@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const API = "";
 const WELCOME = {
@@ -33,6 +35,9 @@ async function request(path, options = {}) {
       ...options,
       headers: {
         ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(sessionStorage.getItem("kanti_session")
+          ? { Authorization: `Bearer ${sessionStorage.getItem("kanti_session")}` }
+          : {}),
         ...options.headers,
       },
     });
@@ -53,7 +58,99 @@ function BrandMark() {
   return <div className="brand-mark">K</div>;
 }
 
+function AuthScreen({
+  ownerExists,
+  username,
+  password,
+  confirmation,
+  error,
+  busy,
+  onUsernameChange,
+  onPasswordChange,
+  onConfirmationChange,
+  onSubmit,
+}) {
+  return (
+    <main className="auth-shell">
+      <section className="auth-card">
+        <div className="auth-brand">
+          <BrandMark />
+          <div>
+            <strong>KANTI</strong>
+            <span>LOCAL AI STUDIO</span>
+          </div>
+        </div>
+        <span className="eyebrow">{ownerExists ? "AKUN PEMILIK" : "PENDAFTARAN PERTAMA"}</span>
+        <h1>{ownerExists ? "Selamat datang kembali" : "Buat akun pemilik"}</h1>
+        <p className="auth-description">
+          {ownerExists
+            ? "Masuk untuk membuka workspace pribadi Anda."
+            : "Buat satu akun pemilik. Pendaftaran akan ditutup setelah akun dibuat."}
+        </p>
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label>
+            Nama pengguna
+            <input
+              autoComplete="username"
+              autoFocus
+              maxLength={80}
+              minLength={3}
+              onChange={(event) => onUsernameChange(event.target.value)}
+              required
+              value={username}
+            />
+          </label>
+          <label>
+            Kata sandi
+            <input
+              autoComplete={ownerExists ? "current-password" : "new-password"}
+              maxLength={1024}
+              minLength={10}
+              onChange={(event) => onPasswordChange(event.target.value)}
+              required
+              type="password"
+              value={password}
+            />
+          </label>
+          {!ownerExists && (
+            <label>
+              Ulangi kata sandi
+              <input
+                autoComplete="new-password"
+                maxLength={1024}
+                minLength={10}
+                onChange={(event) => onConfirmationChange(event.target.value)}
+                required
+                type="password"
+                value={confirmation}
+              />
+            </label>
+          )}
+          {error && <p className="auth-error" role="alert">{error}</p>}
+          <button className="primary-button auth-submit" disabled={busy} type="submit">
+            {busy ? "Memproses..." : ownerExists ? "Masuk" : "Buat akun pemilik"}
+          </button>
+        </form>
+        <p className="auth-footnote">
+          Kata sandi diproses secara lokal dan tidak dikirim ke Groq.
+        </p>
+      </section>
+    </main>
+  );
+}
+
 function App() {
+  const [auth, setAuth] = useState({
+    ready: false,
+    ownerExists: false,
+    authenticated: false,
+    username: "",
+  });
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authConfirmation, setAuthConfirmation] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const [page, setPage] = useState("chat");
   const [health, setHealth] = useState(null);
   const [conversationId, setConversationId] = useState(null);
@@ -99,6 +196,64 @@ function App() {
     }
   }, []);
 
+  const submitAuth = async (event) => {
+    event.preventDefault();
+    setAuthError("");
+    if (!auth.ownerExists && authPassword !== authConfirmation) {
+      setAuthError("Kata sandi dan konfirmasinya belum sama.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const result = await request(
+        auth.ownerExists ? "/api/auth/login" : "/api/auth/register",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            username: authUsername,
+            password: authPassword,
+          }),
+        },
+      );
+      sessionStorage.setItem("kanti_session", result.token);
+      setAuth({
+        ready: true,
+        ownerExists: true,
+        authenticated: true,
+        username: result.username,
+      });
+      setAuthPassword("");
+      setAuthConfirmation("");
+      setAuthError("");
+    } catch (requestError) {
+      setAuthError(requestError.message);
+      if (requestError.status === 409) {
+        setAuth((current) => ({ ...current, ownerExists: true }));
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    try {
+      await request("/api/auth/logout", { method: "POST" });
+    } catch (requestError) {
+      setAuthError(requestError.message);
+    } finally {
+      sessionStorage.removeItem("kanti_session");
+      setAuth((current) => ({
+        ...current,
+        authenticated: false,
+        ownerExists: true,
+      }));
+      setHealth(null);
+      setMessages([WELCOME]);
+      setConversationId(null);
+      setPage("chat");
+    }
+  };
+
   const refreshVaultEntries = useCallback(async () => {
     const result = await request("/api/vault/entries");
     setVaultEntries(result.item);
@@ -121,22 +276,60 @@ function App() {
   }, [financeEnd, financeStart]);
 
   useEffect(() => {
-    refreshHealth();
-  }, [refreshHealth]);
+    let active = true;
+    const restoreSession = async () => {
+      try {
+        const status = await request("/api/auth/status");
+        let username = "";
+        let authenticated = false;
+        const token = sessionStorage.getItem("kanti_session");
+        if (token) {
+          try {
+            const session = await request("/api/auth/session");
+            username = session.username;
+            authenticated = true;
+          } catch {
+            sessionStorage.removeItem("kanti_session");
+          }
+        }
+        if (active) {
+          setAuth({
+            ready: true,
+            ownerExists: status.owner_exists,
+            authenticated,
+            username,
+          });
+        }
+      } catch (requestError) {
+        if (active) {
+          setAuthError(requestError.message);
+          setAuth((current) => ({ ...current, ready: true }));
+        }
+      }
+    };
+    restoreSession();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (auth.authenticated) refreshHealth();
+  }, [auth.authenticated, refreshHealth]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, sending]);
 
   useEffect(() => {
-    if (page === "vault" && vaultStatus.unlocked) {
+    if (auth.authenticated && page === "vault" && vaultStatus.unlocked) {
       refreshVaultEntries().catch((requestError) => setError(requestError.message));
     }
-  }, [page, vaultStatus.unlocked, refreshVaultEntries]);
+  }, [auth.authenticated, page, vaultStatus.unlocked, refreshVaultEntries]);
 
   useEffect(() => {
-    if (page === "finance") refreshFinance();
-  }, [page, refreshFinance]);
+    if (auth.authenticated && page === "finance") refreshFinance();
+  }, [auth.authenticated, page, refreshFinance]);
 
   const startNewChat = () => {
     setConversationId(null);
@@ -338,6 +531,31 @@ function App() {
     }
   };
 
+  if (!auth.ready) {
+    return (
+      <main className="auth-shell">
+        <div className="auth-card loading-card">Memeriksa akses...</div>
+      </main>
+    );
+  }
+
+  if (!auth.authenticated) {
+    return (
+      <AuthScreen
+        ownerExists={auth.ownerExists}
+        username={authUsername}
+        password={authPassword}
+        confirmation={authConfirmation}
+        error={authError}
+        busy={authBusy}
+        onUsernameChange={setAuthUsername}
+        onPasswordChange={setAuthPassword}
+        onConfirmationChange={setAuthConfirmation}
+        onSubmit={submitAuth}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -418,6 +636,7 @@ function App() {
             <span className={health?.assistant_ready ? "server-pill" : "server-pill disconnected"}>
               <i /> {health ? (health.assistant_ready ? "Server lokal aktif" : "API key perlu diatur") : "Menghubungkan"}
             </span>
+            <button className="logout-button" onClick={signOut}>Keluar</button>
             <div className="topbar-avatar">K</div>
           </div>
         </header>
@@ -454,7 +673,24 @@ function App() {
                     {message.role === "assistant" && (
                       <div className="message-author">KANTI AI</div>
                     )}
-                    <div className="message-bubble">{message.text}</div>
+                    {message.role === "assistant" ? (
+                      <div className="message-bubble markdown-content">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            table: ({ children }) => (
+                              <div className="markdown-table-wrap">
+                                <table>{children}</table>
+                              </div>
+                            ),
+                          }}
+                        >
+                          {message.text}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      <div className="message-bubble">{message.text}</div>
+                    )}
                     {message.artifacts?.length > 0 && (
                       <div className="artifact-list">
                         {message.artifacts.map((artifact) => (

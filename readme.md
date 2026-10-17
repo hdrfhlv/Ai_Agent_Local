@@ -20,6 +20,8 @@ invoice PDF.
 - Analisis ulang file Excel yang sudah ada tanpa menghapus sheet data sumber.
 - Buat invoice PDF dengan identitas usaha KANTI.
 - Catat pemasukan dan pengeluaran serta lihat saldo kas dan laporan laba-rugi.
+- **Email Manager (BARU!)**: Cek email penting otomatis, baca, balas, dan kirim
+  email langsung lewat Gmail API tanpa buka browser.
 
 Scraping paling cocok untuk halaman publik yang menyediakan konten produk di
 HTML dan tautan halaman berikutnya yang bisa dikenali. Situs yang bergantung
@@ -53,6 +55,18 @@ GROQ_API_KEY=isi_api_key_groq_di_sini
 Ganti nilai contoh dengan API key Groq milikmu.
 Jangan bagikan file `.env` karena berisi kredensial rahasia.
 
+### Setup Gmail API (untuk fitur email)
+
+Untuk menggunakan fitur email manager, ikuti panduan lengkap di
+**[SETUP_GMAIL.md](SETUP_GMAIL.md)**.
+
+Ringkasannya:
+1. Install dependencies: `pip install -r requirements.txt`
+2. Buat Google Cloud Project dan enable Gmail API
+3. Download OAuth credentials
+4. Rename jadi `gmail_credentials.json` dan taruh di folder `data/`
+5. First-time auth akan buka browser otomatis
+
 Password vault menggunakan file `password_vault.enc` di folder proyek secara
 default. File dibuat saat pertama kali memakai perintah password. Buat master
 password minimal 8 karakter dan simpan dengan aman: master password tidak
@@ -72,11 +86,21 @@ Launcher membuka server API lokal dan website React, lalu membuka browser ke
 digunakan. API hanya menerima koneksi dari komputer ini dan diakses website
 melalui proxy lokal; ini adalah versi localhost, bukan hosting publik.
 
+Saat pertama kali membuka website, buat akun pemilik dengan nama pengguna dan
+kata sandi minimal 10 karakter. Hanya satu akun yang dapat didaftarkan.
+Sesi berakhir saat tab ditutup atau server dimulai ulang; masuk kembali saat
+berikutnya membuka website. Data hash akun disimpan lokal di
+`data/owner_auth.sqlite3` dan file tersebut tidak diunggah ke Git.
+Jika kata sandi terlupa, hentikan server lalu hapus `data/owner_auth.sqlite3`
+untuk mengulang pendaftaran. Tindakan ini hanya mereset akun pemilik, bukan
+data keuangan atau isi vault.
+
 Setelah website terbuka, gunakan halaman **Asisten AI** untuk chat, membuat
-invoice PDF, scrape katalog, atau menganalisis Excel. Tautan unduhan hasil
-invoice dan Excel akan muncul di percakapan. Halaman **Keuangan** berisi
-pencatatan dan laporan kas. Halaman **Password vault** mengelola brankas
-terenkripsi secara lokal. Master password dan isi vault tidak dikirim ke Groq.
+invoice PDF, scrape katalog, menganalisis Excel, atau **mengelola email**.
+Tautan unduhan hasil invoice dan Excel akan muncul di percakapan. Halaman
+**Keuangan** berisi pencatatan dan laporan kas. Halaman **Password vault**
+mengelola brankas terenkripsi secara lokal. Master password dan isi vault tidak
+dikirim ke Groq.
 
 Untuk menghentikan aplikasi, tutup jendela server KANTI AI API dan jendela
 website. Vault otomatis dikunci ketika server berhenti.
@@ -98,6 +122,42 @@ atau:
 Perintah terminal lama tetap tersedia secara terpisah dari website.
 
 ## Menggunakan website
+
+### Email Manager (BARU!)
+
+Di halaman **Asisten AI**, gunakan perintah email untuk mengelola inbox Gmail
+tanpa buka browser:
+
+**Cek email penting:**
+```text
+cek email
+ada email penting gak?
+cek 5 email terakhir
+```
+
+AI otomatis filter email penting saja (verifikasi, klien, invoice, urgent).
+Tidak tampilkan newsletter, promo, atau spam.
+
+**Baca email lengkap:**
+```text
+baca email 1
+buka email pertama
+```
+
+**Balas email:**
+```text
+balas email 1, bilang terima kasih sudah konfirmasi
+reply email kedua, kasih tau invoice sudah dikirim
+```
+
+AI akan generate balasan, kirim lewat Gmail API, dan mark email as read.
+
+**Kirim email baru:**
+```text
+kirim email ke client@example.com subjek "Update Project" isi "Project sudah selesai"
+```
+
+Setup Gmail API wajib dilakukan dulu, lihat **[SETUP_GMAIL.md](SETUP_GMAIL.md)**.
 
 ### Pembukuan keuangan
 

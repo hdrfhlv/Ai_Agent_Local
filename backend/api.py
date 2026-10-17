@@ -8,8 +8,8 @@ from typing import Any
 from urllib.parse import quote
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from groq import Groq
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,13 @@ from skills.finance import (  # noqa: E402
     catat_transaksi_keuangan,
     hapus_transaksi_keuangan,
     ringkasan_keuangan,
+)
+from skills.email_manager import (  # noqa: E402
+    EMAIL_TOOL_SCHEMAS,
+    baca_email,
+    balas_email,
+    cek_email_penting,
+    kirim_email,
 )
 from skills.password import (  # noqa: E402
     ambil_password,
@@ -39,6 +46,16 @@ from skills.scrapper import (  # noqa: E402
     analyze_scraped_data,
     scrape_products,
 )
+from backend.auth import (  # noqa: E402
+    authenticate_owner,
+    clear_sessions,
+    create_owner,
+    create_session,
+    initialize_auth_store,
+    owner_exists,
+    revoke_session,
+    session_username,
+)
 
 MODEL = "openai/gpt-oss-20b"
 API_KEY = os.environ.get("GROQ_API_KEY")
@@ -50,6 +67,10 @@ TOOL_FUNCS = {
     "buat_invoice": buat_invoice,
     "catat_transaksi_keuangan": catat_transaksi_keuangan,
     "ringkasan_keuangan": ringkasan_keuangan,
+    "cek_email_penting": cek_email_penting,
+    "baca_email": baca_email,
+    "balas_email": balas_email,
+    "kirim_email": kirim_email,
 }
 TOOLS = [
     {
@@ -60,7 +81,12 @@ TOOLS = [
             "parameters": schema["input_schema"],
         },
     }
-    for schema in [*ACTIVE_TOOL_SCHEMAS, *INVOICE_TOOL_SCHEMAS, *FINANCE_TOOL_SCHEMAS]
+    for schema in [
+        *ACTIVE_TOOL_SCHEMAS,
+        *INVOICE_TOOL_SCHEMAS,
+        *FINANCE_TOOL_SCHEMAS,
+        *EMAIL_TOOL_SCHEMAS,
+    ]
 ]
 
 SYSTEM_PROMPT = """
@@ -86,6 +112,19 @@ laba/rugi periode, dan saldo kas bersih dari transaksi yang tercatat. Ini
 pembukuan kas sederhana, BUKAN neraca formal aset, kewajiban, dan modal.
 Jelaskan jika hasil hanya mencakup data yang sudah dicatat.
 
+Kamu juga punya tool email Gmail:
+- cek_email_penting untuk menampilkan email penting yang belum dibaca.
+- baca_email untuk membaca email berdasarkan ID dari hasil pemeriksaan.
+- balas_email dan kirim_email untuk mengirim email.
+Untuk email:
+- Jangan membalas atau mengirim email kecuali user meminta dengan jelas.
+- Jika user hanya meminta draf balasan, jangan kirim; tampilkan draf untuk
+  dikonfirmasi lebih dulu.
+- Saat user meminta cek email, panggil cek_email_penting dan tampilkan hasil
+  ringkas bernomor agar user dapat memilih email yang ingin dibaca.
+- Jika hasil tool gagal, jelaskan error sebenarnya; jangan mengklaim inbox kosong.
+- Jangan mengarang isi atau metadata email yang tidak dikembalikan tool.
+
 Password vault hanya ditangani lewat fitur vault terpisah di aplikasi lokal.
 Jangan meminta user memasukkan password ke chat dan jangan pernah meminta,
 menyimpan, atau mengirim isi vault ke model.
@@ -93,11 +132,34 @@ menyimpan, atau mengirim isi vault ke model.
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    initialize_auth_store()
+    clear_sessions()
     yield
     kunci_vault()
 
 
 app = FastAPI(title="KANTI Local AI", version="1.0.0", lifespan=lifespan)
+
+_PUBLIC_AUTH_PATHS = {
+    "/api/auth/status",
+    "/api/auth/register",
+    "/api/auth/login",
+}
+
+
+@app.middleware("http")
+async def require_owner_session(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in _PUBLIC_AUTH_PATHS:
+        authorization = request.headers.get("Authorization", "")
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token or not session_username(token):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Sesi berakhir. Silakan masuk kembali."},
+            )
+    return await call_next(request)
+
 
 _conversations: dict[str, list[dict[str, Any]]] = {}
 _conversation_locks: dict[str, threading.Lock] = {}
@@ -107,6 +169,11 @@ _conversations_guard = threading.Lock()
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     conversation_id: str | None = Field(default=None, max_length=64)
+
+
+class OwnerAuthRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=80)
+    password: str = Field(min_length=10, max_length=1024)
 
 
 class VaultOpenRequest(BaseModel):
@@ -155,6 +222,34 @@ def _tool_result(tool_call: Any) -> dict[str, Any]:
     return function(**arguments)
 
 
+def _format_email_check_result(result: dict[str, Any]) -> str:
+    if not result.get("ok"):
+        return f"Gagal cek email: {result.get('error', 'alasan tidak diketahui')}"
+
+    emails = result.get("email", [])
+    if not emails:
+        return result.get("pesan", "Tidak ada email penting yang belum dibaca.")
+
+    lines = [f"Ditemukan {len(emails)} email penting yang belum dibaca:"]
+    for index, email in enumerate(emails, start=1):
+        lines.extend(
+            [
+                f"{index}. ID: `{email.get('id', 'tidak tersedia')}`",
+                f"   Dari: {email.get('dari', 'Tidak diketahui')}",
+                f"   Subjek: {email.get('subjek', '(Tanpa subjek)')}",
+                f"   Tanggal: {email.get('tanggal', 'Tidak diketahui')}",
+                f"   Preview: {email.get('preview', '')}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Untuk membaca email, kirim: baca email lalu salin ID yang diinginkan.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _short_result(result: dict[str, Any], limit: int = 3000) -> str:
     encoded = json.dumps(result, ensure_ascii=False)
     if len(encoded) <= limit:
@@ -198,6 +293,7 @@ def _run_chat(history: list[dict[str, Any]]) -> tuple[str, list[dict[str, str]]]
         )
 
     artifacts: list[dict[str, str]] = []
+    email_check_result: dict[str, Any] | None = None
     for _ in range(5):
         response = client.chat.completions.create(
             model=MODEL,
@@ -236,6 +332,8 @@ def _run_chat(history: list[dict[str, Any]]) -> tuple[str, list[dict[str, str]]]
                 result = {"ok": False, "error": str(exc)}
             except Exception as exc:
                 result = {"ok": False, "error": f"Tool gagal dijalankan: {exc}"}
+            if call.function.name == "cek_email_penting":
+                email_check_result = result
             artifact = _make_artifact(result.get("file"))
             if artifact and artifact not in artifacts:
                 artifacts.append(artifact)
@@ -246,6 +344,10 @@ def _run_chat(history: list[dict[str, Any]]) -> tuple[str, list[dict[str, str]]]
                     "content": _short_result(result),
                 }
             )
+        if email_check_result is not None:
+            answer = _format_email_check_result(email_check_result)
+            history.append({"role": "assistant", "content": answer})
+            return answer, artifacts
 
     raise HTTPException(
         status_code=502,
@@ -261,6 +363,54 @@ def health() -> dict[str, Any]:
         "vault_exists": vault_ada(),
         "vault_unlocked": vault_terbuka(),
     }
+
+
+@app.get("/api/auth/status")
+def auth_status() -> dict[str, bool]:
+    return {"owner_exists": owner_exists()}
+
+
+@app.post("/api/auth/register")
+def auth_register(request: OwnerAuthRequest) -> dict[str, str]:
+    username = request.username.strip()
+    if len(username) < 3:
+        raise HTTPException(
+            status_code=422,
+            detail="Nama pengguna harus memiliki minimal 3 karakter.",
+        )
+    try:
+        create_owner(username, request.password)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"token": create_session(username.casefold()), "username": username}
+
+
+@app.post("/api/auth/login")
+def auth_login(request: OwnerAuthRequest) -> dict[str, str]:
+    username = authenticate_owner(request.username, request.password)
+    if username is None:
+        raise HTTPException(status_code=401, detail="Nama pengguna atau kata sandi salah.")
+    return {"token": create_session(username), "username": username}
+
+
+@app.get("/api/auth/session")
+def auth_session(request: Request) -> dict[str, str]:
+    token = request.headers.get("Authorization", "").partition(" ")[2]
+    username = session_username(token)
+    if username is None:
+        raise HTTPException(status_code=401, detail="Sesi berakhir. Silakan masuk kembali.")
+    return {"username": username}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request) -> dict[str, bool]:
+    token = request.headers.get("Authorization", "").partition(" ")[2]
+    revoke_session(token)
+    kunci_vault()
+    with _conversations_guard:
+        _conversations.clear()
+        _conversation_locks.clear()
+    return {"ok": True}
 
 
 @app.post("/api/chat")

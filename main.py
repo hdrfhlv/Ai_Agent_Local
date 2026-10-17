@@ -28,6 +28,13 @@ from skills.password import (
     vault_ada,
     vault_terbuka,
 )
+from skills.email_manager import (
+    EMAIL_TOOL_SCHEMAS,
+    cek_email_penting,
+    baca_email,
+    balas_email,
+    kirim_email,
+)
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 MODEL = "openai/gpt-oss-20b"
@@ -42,6 +49,10 @@ TOOL_FUNCS = {
     "scrape_products": scrape_products,
     "analyze_scraped_data": analyze_scraped_data,
     "buat_invoice": buat_invoice,
+    "cek_email_penting": cek_email_penting,
+    "baca_email": baca_email,
+    "balas_email": balas_email,
+    "kirim_email": kirim_email,
 }
 
 TOOLS = [
@@ -53,7 +64,7 @@ TOOLS = [
             "parameters": schema["input_schema"],
         },
     }
-    for schema in [*ACTIVE_TOOL_SCHEMAS, *INVOICE_TOOL_SCHEMAS]
+    for schema in [*ACTIVE_TOOL_SCHEMAS, *INVOICE_TOOL_SCHEMAS, *EMAIL_TOOL_SCHEMAS]
 ]
 
 # ---------- Instruksi awal dan riwayat percakapan ----------
@@ -109,6 +120,23 @@ messages = [
         "lihat password <layanan>", "daftar password", "hapus password <layanan>",
         "generate password [panjang]", dan "kunci vault". Ingatkan juga untuk
         JANGAN mengetik password langsung di chat dengan kamu.
+
+        Kamu juga punya tool email:
+        - cek_email_penting: cek email penting (verifikasi, klien, urgent) yang
+          belum dibaca. Filter otomatis, tidak tampilkan newsletter/spam.
+        - baca_email: baca isi lengkap email berdasarkan ID.
+        - balas_email: balas email langsung lewat Gmail API tanpa buka browser.
+          Otomatis mark email as read setelah dibalas.
+        - kirim_email: kirim email baru ke alamat tertentu.
+        
+        Untuk email:
+        - JANGAN balas atau kirim email tanpa konfirmasi eksplisit dari user.
+        - Kalau user minta "cek email", panggil cek_email_penting lalu tampilkan
+          ringkasannya dengan nomor urut biar user bisa pilih mana yang mau dibaca.
+        - Kalau user bilang "baca email 1" atau "buka email pertama", ambil ID
+          email dari hasil cek_email_penting tadi, lalu panggil baca_email.
+        - Kalau user minta balas, tawarkan draf balasan dulu, baru kirim kalau
+          user setuju.
         """,
     }
 ]
@@ -430,6 +458,22 @@ while True:
         kunci_vault()
         print("AI: Yaela udahan mulu")
         break
+
+    # Perintah email dijalankan langsung agar tidak bergantung pada tool call AI.
+    if pertanyaan.lower() == "cek email":
+        print("\nAI: Lagi cek email penting...")
+        hasil = cek_email_penting()
+        if not hasil.get("ok"):
+            print("AI: Gagal cek email:", hasil.get("error", "alasan tidak diketahui"))
+        elif not hasil.get("email"):
+            print("AI:", hasil.get("pesan", "Tidak ada email penting yang belum dibaca."))
+        else:
+            print(f"\nAI: Ada {hasil['jumlah']} email penting yang belum dibaca:")
+            for nomor, email in enumerate(hasil["email"], start=1):
+                print(f"{nomor}. [Dari: {email['dari']}] {email['subjek']}")
+                print(f"   {email['tanggal']} — {email['preview']}")
+        print()
+        continue
 
     # Perintah manual untuk password vault (tidak diteruskan ke AI)
     if tangani_perintah_password(pertanyaan):

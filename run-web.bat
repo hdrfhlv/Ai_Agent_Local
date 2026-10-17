@@ -21,7 +21,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-curl.exe --silent --fail http://127.0.0.1:5173/api/finance/summary | findstr.exe /C:"pengeluaran_per_kategori" >nul 2>&1
+curl.exe --silent --fail http://127.0.0.1:5173/api/auth/status | findstr.exe /C:"owner_exists" >nul 2>&1
 if not errorlevel 1 goto open_existing
 
 netstat -ano -p tcp | findstr /R /C:":5173 .*LISTENING" >nul
@@ -32,7 +32,7 @@ if not errorlevel 1 (
     exit /b 1
 )
 
-curl.exe --silent --fail http://127.0.0.1:8000/api/finance/summary | findstr.exe /C:"pengeluaran_per_kategori" >nul 2>&1
+curl.exe --silent --fail http://127.0.0.1:8000/api/auth/status | findstr.exe /C:"owner_exists" >nul 2>&1
 if not errorlevel 1 goto api_ready
 
 netstat -ano -p tcp | findstr /R /C:":8000 .*LISTENING" >nul
